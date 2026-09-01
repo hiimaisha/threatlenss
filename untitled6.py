@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 
-# Auto-install WHOIS binary
+# Auto-install WHOIS binary if missing
 try:
     subprocess.run(["whois", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 except FileNotFoundError:
@@ -30,7 +30,7 @@ st.title("🛡️ ThreatLens - AI Threat Analysis")
 st.caption("Analyze IP addresses, Domains, or URLs with VirusTotal, WHOIS & Gemini AI")
 
 # ------------------------------------------------------------------------------
-# 2. SIDEBAR CONFIGURATION
+# 2. SIDEBAR - CONFIGURATION
 # ------------------------------------------------------------------------------
 st.sidebar.header("🔑 Configuration")
 
@@ -109,7 +109,7 @@ SOURCES = {
 }
 
 # ------------------------------------------------------------------------------
-# 4. MAIN APPLICATION
+# 4. MAIN UI APPLICATION
 # ------------------------------------------------------------------------------
 target_input = st.text_input("Enter IP Address, Domain, or URL:", placeholder="e.g., 8.8.8.8, example.com, https://login.com")
 
@@ -138,6 +138,23 @@ if st.button("Analyze Threat", type="primary"):
                 try:
                     client = genai.Client(api_key=gemini_api_key)
                     
+                    # DYNAMICALLY FIND AVAILABLE MODEL FOR YOUR API KEY
+                    available_models = [m.name for m in client.models.list()]
+                    selected_model = None
+                    
+                    # Preference order: flash -> pro -> any available
+                    for m in available_models:
+                        if "flash" in m.lower():
+                            selected_model = m
+                            break
+                    if not selected_model:
+                        for m in available_models:
+                            if "gemini" in m.lower():
+                                selected_model = m
+                                break
+                    if not selected_model:
+                        selected_model = available_models[0]
+
                     prompt = f"""
                     You are a cybersecurity threat analyst. Analyze the following target data and provide a concise assessment.
                     
@@ -152,14 +169,14 @@ if st.button("Analyze Threat", type="primary"):
                     3. Actionable Advice: Provide 2-3 clear next steps for the user.
                     """
 
-                    # Explicitly targeting the core supported model
                     response = client.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model=selected_model,
                         contents=prompt,
                     )
 
                     st.markdown("---")
                     st.subheader("📋 AI Risk Assessment")
+                    st.caption(f"Powered by `{selected_model}`")
                     st.markdown(response.text)
 
                 except Exception as e:
