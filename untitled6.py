@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 
-# Auto-install WHOIS binary if missing
+# Auto-install WHOIS system binary if missing
 try:
     subprocess.run(["whois", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 except FileNotFoundError:
@@ -27,10 +27,10 @@ st.set_page_config(
 )
 
 st.title("🛡️ ThreatLens - AI Threat Analysis")
-st.caption("Analyze IP addresses, Domains, or URLs with VT, WHOIS & Gemini AI")
+st.caption("Analyze IP addresses, Domains, or URLs with VirusTotal, WHOIS & Gemini AI")
 
 # ------------------------------------------------------------------------------
-# 2. SIDEBAR - API KEYS & SETTINGS
+# 2. SIDEBAR - CONFIGURATION
 # ------------------------------------------------------------------------------
 st.sidebar.header("🔑 Configuration")
 
@@ -48,7 +48,7 @@ level = st.sidebar.selectbox(
 )
 
 # ------------------------------------------------------------------------------
-# 3. HELPER FUNCTIONS
+# 3. HELPER FUNCTIONS & REGISTRY
 # ------------------------------------------------------------------------------
 def detect_target_type(target: str) -> str:
     target = target.strip()
@@ -108,8 +108,31 @@ SOURCES = {
     "WHOIS": get_whois_data,
 }
 
+# Dynamic model runner to prevent any model availability crash
+def generate_gemini_analysis(client, prompt):
+    candidate_models = [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash",
+        "gemini-flash"
+    ]
+    
+    last_exception = None
+    for model_name in candidate_models:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            return response.text, model_name
+        except Exception as e:
+            last_exception = e
+            continue
+            
+    raise last_exception
+
 # ------------------------------------------------------------------------------
-# 4. MAIN APPLICATION
+# 4. MAIN UI APPLICATION
 # ------------------------------------------------------------------------------
 target_input = st.text_input("Enter IP Address, Domain, or URL:", placeholder="e.g., 8.8.8.8, example.com, https://login.com")
 
@@ -152,15 +175,12 @@ if st.button("Analyze Threat", type="primary"):
                     3. Actionable Advice: Provide 2-3 clear next steps for the user.
                     """
 
-                    # Using supported model
-                    response = client.models.generate_content(
-                        model="gemini-2.5-flash",
-                        contents=prompt,
-                    )
+                    analysis_text, used_model = generate_gemini_analysis(client, prompt)
 
                     st.markdown("---")
                     st.subheader("📋 AI Risk Assessment")
-                    st.markdown(response.text)
+                    st.caption(f"Powered by Gemini (`{used_model}`)")
+                    st.markdown(analysis_text)
 
                 except Exception as e:
                     st.error(f"Failed to generate AI analysis: {str(e)}")
