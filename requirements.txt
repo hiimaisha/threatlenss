@@ -1,0 +1,4 @@
+streamlit
+python-whois
+requests
+google-genai
