@@ -152,10 +152,17 @@ if st.button("Analyze Threat", type="primary"):
                     3. Actionable Advice: Provide 2-3 clear next steps for the user.
                     """
 
-                    response = client.models.generate_content(
-                        model="gemini-3.6-flash",
-                        contents=prompt,
-                    )
+                    # Fallback system: Pehle gemini-2.5-flash try karega, agar busy ho to 2.5-pro use karega
+                    try:
+                        response = client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=prompt,
+                        )
+                    except Exception:
+                        response = client.models.generate_content(
+                            model="gemini-2.5-pro",
+                            contents=prompt,
+                        )
 
                     st.markdown("---")
                     st.subheader("📋 AI Risk Assessment")
