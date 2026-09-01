@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 
-# Auto-install WHOIS binary if missing (System package fix)
+# Auto-install WHOIS binary if missing
 try:
     subprocess.run(["whois", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 except FileNotFoundError:
@@ -153,7 +153,7 @@ if st.button("Analyze Threat", type="primary"):
                     """
 
                     response = client.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-3.6-flash",
                         contents=prompt,
                     )
 
