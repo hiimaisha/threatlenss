@@ -10,7 +10,6 @@ from google import genai
 
 from sources import SOURCES
 
-
 st.set_page_config(page_title="ThreatLens - Security Analysis", page_icon="🛡️", layout="wide")
 
 st.title("🛡️ ThreatLens - AI Threat Analysis")
@@ -43,20 +42,17 @@ def validate_target(target, target_type):
     target = target.strip()
     if not target:
         return False, "Please enter an IP address, domain, or URL."
-
     if target_type == "ip":
         try:
             ipaddress.ip_address(target)
             return True, ""
         except ValueError:
             return False, "Invalid IP address."
-
     if target_type == "url":
         parsed = urlparse(target)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             return False, "Invalid URL. Use a complete URL such as https://example.com."
         return True, ""
-
     domain = target.lower().rstrip(".")
     if len(domain) > 253 or not re.match(r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$", domain):
         return False, "Invalid domain. Use a domain such as example.com."
@@ -64,57 +60,66 @@ def validate_target(target, target_type):
 
 
 def get_available_gemini_models(client):
-    """Return usable Gemini Flash models, preferring the newest practical model."""
     preferred = [
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
         "gemini-3.1-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash",
     ]
-
     try:
         models = list(client.models.list())
         available = set()
         for model in models:
-            name = getattr(model, "name", "") or ""
-            name = name.removeprefix("models/")
+            name = (getattr(model, "name", "") or "").removeprefix("models/")
             if name and "gemini" in name.lower() and "flash" in name.lower():
                 available.add(name)
-
         selected = [name for name in preferred if name in available]
         remaining = sorted(available - set(selected))
         return selected + remaining
     except Exception:
-        # Keep a safe fallback list if model discovery itself is temporarily unavailable.
         return preferred
 
 
 def is_temporary_gemini_error(exc):
     message = str(exc).upper()
-    return "503" in message or "UNAVAILABLE" in message or "429" in message or "RESOURCE_EXHAUSTED" in message
+    return any(code in message for code in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"))
+
+
+def compact_results(results):
+    """Keep the Gemini prompt small so reports generate quickly."""
+    compact = {}
+    for name, result in results.items():
+        if not isinstance(result, dict):
+            compact[name] = result
+            continue
+        item = dict(result)
+        data = item.get("data")
+        serialized = json.dumps(data, default=str)
+        if len(serialized) > 5000:
+            serialized = serialized[:5000] + "... [truncated]"
+        item["data"] = serialized
+        compact[name] = item
+    return compact
 
 
 def build_prompt(target, target_type, level, results):
     return f"""You are a cybersecurity threat analyst.
-
-Analyze this target using ONLY the collected VirusTotal and WHOIS information. Do not invent facts.
+Analyze the target ONLY from the supplied VirusTotal/WHOIS data. Never invent facts.
 
 Target: {target}
-Target type: {target_type}
-User expertise: {level}
-Collected data:
-{json.dumps(results, indent=2, default=str)}
+Type: {target_type}
+Expertise: {level}
+Data:
+{json.dumps(compact_results(results), indent=2, default=str)}
 
-Return a concise report with exactly these sections:
-1. VERDICT: SAFE, SUSPICIOUS, MALICIOUS, or UNKNOWN
-2. CONFIDENCE: Low, Medium, or High
-3. SUMMARY
-4. KEY FINDINGS
-5. RISK FACTORS
-6. RECOMMENDATION
-
-If the sources are unavailable, contradictory, or insufficient, use UNKNOWN rather than guessing.
-Explain technical details at the user's {level} level.
+Return a SHORT report using exactly:
+VERDICT: SAFE/SUSPICIOUS/MALICIOUS/UNKNOWN
+CONFIDENCE: Low/Medium/High
+SUMMARY: 2-3 sentences
+KEY FINDINGS: 3-5 bullets
+RISK FACTORS: 2-4 bullets
+RECOMMENDATION: 1-3 sentences
+If evidence is insufficient, use UNKNOWN.
 """
 
 
@@ -123,10 +128,10 @@ def analyze_with_gemini(api_key, prompt):
     models = get_available_gemini_models(client)
     last_error = None
 
-    # Gemini can temporarily return 503 during capacity spikes. Retry with
-    # exponential backoff, then automatically try another available Flash model.
-    for model in models:
-        for attempt in range(3):
+    # Use the fastest available Flash model first. Only one short retry is
+    # performed before moving to another model, preventing long wait times.
+    for model in models[:3]:
+        for attempt in range(2):
             try:
                 response = client.models.generate_content(model=model, contents=prompt)
                 text = getattr(response, "text", None)
@@ -135,12 +140,11 @@ def analyze_with_gemini(api_key, prompt):
                 return model, text
             except Exception as exc:
                 last_error = exc
-                if not is_temporary_gemini_error(exc):
+                if not is_temporary_gemini_error(exc) or attempt == 1:
                     break
-                if attempt < 2:
-                    time.sleep(3 * (2 ** attempt))
+                time.sleep(2)
 
-    raise RuntimeError(f"Gemini models were temporarily unavailable. Last error: {last_error}")
+    raise RuntimeError(f"Gemini is temporarily unavailable. Please try again shortly. Last error: {last_error}")
 
 
 st.sidebar.header("🔑 Configuration")
@@ -157,7 +161,6 @@ if vt_secret:
     st.sidebar.caption("✓ VirusTotal key loaded from app secrets")
 if gemini_secret:
     st.sidebar.caption("✓ Gemini key loaded from app secrets")
-
 
 target_input = st.text_input(
     "Enter IP Address, Domain, or URL:",
