@@ -2,6 +2,7 @@ import ipaddress
 import json
 import os
 import re
+import time
 from urllib.parse import urlparse
 
 import streamlit as st
@@ -62,33 +63,35 @@ def validate_target(target, target_type):
     return True, ""
 
 
-def get_available_gemini_model(client):
-    """Pick a currently available Gemini model instead of hard-coding an obsolete one."""
-    preferred_names = ["gemini-3.6-flash"]
+def get_available_gemini_models(client):
+    """Return usable Gemini Flash models, preferring the newest practical model."""
+    preferred = [
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+    ]
+
     try:
         models = list(client.models.list())
-        names = []
+        available = set()
         for model in models:
             name = getattr(model, "name", "") or ""
             name = name.removeprefix("models/")
-            if name:
-                names.append(name)
+            if name and "gemini" in name.lower() and "flash" in name.lower():
+                available.add(name)
 
-        for preferred in preferred_names:
-            if preferred in names:
-                return preferred
-
-        flash_models = [n for n in names if "gemini" in n.lower() and "flash" in n.lower()]
-        if flash_models:
-            return flash_models[0]
-
-        gemini_models = [n for n in names if "gemini" in n.lower()]
-        if gemini_models:
-            return gemini_models[0]
+        selected = [name for name in preferred if name in available]
+        remaining = sorted(available - set(selected))
+        return selected + remaining
     except Exception:
-        pass
+        # Keep a safe fallback list if model discovery itself is temporarily unavailable.
+        return preferred
 
-    return "gemini-3.6-flash"
+
+def is_temporary_gemini_error(exc):
+    message = str(exc).upper()
+    return "503" in message or "UNAVAILABLE" in message or "429" in message or "RESOURCE_EXHAUSTED" in message
 
 
 def build_prompt(target, target_type, level, results):
@@ -117,12 +120,27 @@ Explain technical details at the user's {level} level.
 
 def analyze_with_gemini(api_key, prompt):
     client = genai.Client(api_key=api_key)
-    model = get_available_gemini_model(client)
-    response = client.models.generate_content(model=model, contents=prompt)
-    text = getattr(response, "text", None)
-    if not text:
-        raise RuntimeError("Gemini returned an empty response.")
-    return model, text
+    models = get_available_gemini_models(client)
+    last_error = None
+
+    # Gemini can temporarily return 503 during capacity spikes. Retry with
+    # exponential backoff, then automatically try another available Flash model.
+    for model in models:
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(model=model, contents=prompt)
+                text = getattr(response, "text", None)
+                if not text:
+                    raise RuntimeError("Gemini returned an empty response.")
+                return model, text
+            except Exception as exc:
+                last_error = exc
+                if not is_temporary_gemini_error(exc):
+                    break
+                if attempt < 2:
+                    time.sleep(3 * (2 ** attempt))
+
+    raise RuntimeError(f"Gemini models were temporarily unavailable. Last error: {last_error}")
 
 
 st.sidebar.header("🔑 Configuration")
@@ -198,5 +216,5 @@ if st.button("Analyze Threat", type="primary", use_container_width=True):
                 st.caption(f"Powered by `{selected_model}`")
                 st.markdown(report)
             except Exception as exc:
-                st.error("AI analysis could not be generated, but the source results above are still available.")
+                st.error("AI analysis could not be generated right now. Please try Analyze Threat again in a moment.")
                 st.caption(f"Technical detail: {exc}")
